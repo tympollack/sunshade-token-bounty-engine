@@ -13,17 +13,23 @@ import type {
 export interface BountyEngineClientOptions {
   baseUrl: string;
   apiKey?: string;
+  adminKey?: string;
+  userId?: string;
   fetchFn?: typeof fetch;
 }
 
 export class BountyEngineClient {
   private baseUrl: string;
   private apiKey?: string;
+  private adminKey?: string;
+  private userId?: string;
   private fetchFn: typeof fetch;
 
   constructor(options: BountyEngineClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '');
     this.apiKey = options.apiKey;
+    this.adminKey = options.adminKey;
+    this.userId = options.userId;
     this.fetchFn = options.fetchFn || globalThis.fetch.bind(globalThis);
   }
 
@@ -37,6 +43,14 @@ export class BountyEngineClient {
     if (this.apiKey) {
       headers['Authorization'] = `Bearer ${this.apiKey}`;
       headers['x-api-key'] = this.apiKey;
+    }
+
+    if (this.adminKey) {
+      headers['x-admin-key'] = this.adminKey;
+    }
+
+    if (this.userId && !headers['x-user-id']) {
+      headers['x-user-id'] = this.userId;
     }
 
     const res = await this.fetchFn(url, {
@@ -90,9 +104,17 @@ export class BountyEngineClient {
     existingWeeklyHours?: number;
     flexBankHoursAvailable?: number;
     allowOverride?: boolean;
+    callerUserId?: string;
   }): Promise<{ success: boolean; capacity: CapacityCheckResult }> {
+    const callerId = params.callerUserId || params.claimantUserId || this.userId;
+    const customHeaders: Record<string, string> = {};
+    if (callerId) {
+      customHeaders['x-user-id'] = callerId;
+    }
+
     return this.request('/api/v1/bounties/claim', {
       method: 'POST',
+      headers: customHeaders,
       body: JSON.stringify(params),
     });
   }
@@ -106,9 +128,18 @@ export class BountyEngineClient {
     systemPoolUserId?: string;
     neglectMultiplier?: number;
     vested?: boolean;
+    callerUserId?: string;
   }): Promise<MintEfficiencyResult> {
+    const callerId =
+      params.callerUserId || params.claimantUserId || params.item.assignee_id || this.userId;
+    const customHeaders: Record<string, string> = {};
+    if (callerId) {
+      customHeaders['x-user-id'] = callerId;
+    }
+
     return this.request('/api/v1/mint/efficiency', {
       method: 'POST',
+      headers: customHeaders,
       body: JSON.stringify(params),
     });
   }
@@ -119,9 +150,17 @@ export class BountyEngineClient {
   async convertRebateToUtility(params: {
     userId: string;
     rebateTokens: number;
+    callerUserId?: string;
   }): Promise<UtilityConversionResult> {
+    const callerId = params.callerUserId || params.userId || this.userId;
+    const customHeaders: Record<string, string> = {};
+    if (callerId) {
+      customHeaders['x-user-id'] = callerId;
+    }
+
     return this.request('/api/v1/exchange/utility', {
       method: 'POST',
+      headers: customHeaders,
       body: JSON.stringify(params),
     });
   }
@@ -135,9 +174,17 @@ export class BountyEngineClient {
     serviceName: string;
     referenceId?: string;
     description?: string;
+    callerUserId?: string;
   }): Promise<UtilityBurnResult> {
+    const callerId = params.callerUserId || params.userId || this.userId;
+    const customHeaders: Record<string, string> = {};
+    if (callerId) {
+      customHeaders['x-user-id'] = callerId;
+    }
+
     return this.request('/api/v1/exchange/burn', {
       method: 'POST',
+      headers: customHeaders,
       body: JSON.stringify(params),
     });
   }

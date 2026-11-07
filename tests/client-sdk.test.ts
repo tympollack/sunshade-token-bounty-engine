@@ -80,4 +80,52 @@ describe('BountyEngineClient SDK Tests', () => {
       })
     ).rejects.toThrow('Runner weekly capacity exceeded.');
   });
+
+  it('sends caller identity headers on mint and burn requests (BUG-0001)', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      apiKey: 'test-api-key',
+      userId: 'usr-client',
+      fetchFn: mockFetch as any,
+    });
+
+    // 1. burnUtilityTokens sends x-user-id
+    await client.burnUtilityTokens({
+      userId: 'usr-client',
+      amount: 100,
+      serviceName: 'test-service',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/exchange/burn',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-user-id': 'usr-client',
+        }),
+      })
+    );
+
+    // 2. mintEfficiencyYield derives and sends x-user-id from item assignee
+    await client.mintEfficiencyYield({
+      item: {
+        id: 'task-1',
+        status: 'complete',
+        assignee_id: 'usr-assignee',
+      },
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/mint/efficiency',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-user-id': 'usr-assignee',
+        }),
+      })
+    );
+  });
 });
