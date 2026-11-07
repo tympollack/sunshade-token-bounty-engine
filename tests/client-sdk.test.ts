@@ -1,0 +1,193 @@
+import { describe, it, expect, vi } from 'vitest';
+import { BountyEngineClient } from '../src/client/bountyEngineClient';
+
+describe('BountyEngineClient SDK Tests', () => {
+  it('calls health endpoint', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: 'ok', service: 'sunshade-token-bounty-engine', version: '1.0.0' }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      fetchFn: mockFetch as any,
+    });
+
+    const health = await client.getHealth();
+    expect(health.status).toBe('ok');
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/health',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+        }),
+      })
+    );
+  });
+
+  it('passes authentication headers and quotes bounty rates', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        quote: {
+          baseHours: 2.0,
+          hourlyTokenRate: 60000,
+          bountyTokens: 120000,
+          neglectMultiplier: 1.0,
+        },
+      }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      apiKey: 'test-secret-key',
+      fetchFn: mockFetch as any,
+    });
+
+    const { quote } = await client.getQuote({ bounty_hours: 2.0 });
+    expect(quote.bountyTokens).toBe(120000);
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/bounties/quote?bounty_hours=2'),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-secret-key',
+          'x-api-key': 'test-secret-key',
+        }),
+      })
+    );
+  });
+
+  it('handles client errors gracefully', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({
+        success: false,
+        error: 'Runner weekly capacity exceeded.',
+      }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      fetchFn: mockFetch as any,
+    });
+
+    await expect(
+      client.claimBounty({
+        claimantUserId: 'usr-1',
+        newTaskHours: 10.0,
+      })
+    ).rejects.toThrow('Runner weekly capacity exceeded.');
+  });
+
+  it('sends caller identity headers on mint and burn requests (BUG-0001)', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      apiKey: 'test-api-key',
+      userId: 'usr-client',
+      fetchFn: mockFetch as any,
+    });
+
+    // 1. burnUtilityTokens sends x-user-id
+    await client.burnUtilityTokens({
+      userId: 'usr-client',
+      amount: 100,
+      serviceName: 'test-service',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/exchange/burn',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-user-id': 'usr-client',
+        }),
+      })
+    );
+
+    // 2. mintEfficiencyYield derives and sends x-user-id from item assignee
+    await client.mintEfficiencyYield({
+      item: {
+        id: 'task-1',
+        status: 'complete',
+        assignee_id: 'usr-assignee',
+      },
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/mint/efficiency',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-user-id': 'usr-assignee',
+        }),
+      })
+    );
+
+    // 3. burnUtilityTokens preserves caller identity when burning a target wallet (SEC-0001)
+    await client.burnUtilityTokens({
+      userId: 'usr-target-bob',
+      amount: 50,
+      serviceName: 'test-service',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/exchange/burn',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-user-id': 'usr-client', // NOT usr-target-bob!
+        }),
+      })
+    );
+  });
+
+  it('rejects burnUtilityTokens when caller identity is omitted without admin key (BUG-0001)', async () => {
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      apiKey: 'test-api-key',
+    });
+
+    await expect(
+      client.burnUtilityTokens({
+        userId: 'usr-target',
+        amount: 50,
+        serviceName: 'test-service',
+      })
+    ).rejects.toThrow('Caller identity (callerUserId or client userId) is required for token burn');
+  });
+
+  it('allows burnUtilityTokens without caller identity when adminKey is provided alongside apiKey', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      apiKey: 'test-api-key',
+      adminKey: 'test-admin-key',
+      fetchFn: mockFetch as any,
+    });
+
+    await client.burnUtilityTokens({
+      userId: 'usr-target',
+      amount: 50,
+      serviceName: 'test-service',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/exchange/burn',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-api-key',
+          'x-api-key': 'test-api-key',
+          'x-admin-key': 'test-admin-key',
+        }),
+      })
+    );
+  });
+});
