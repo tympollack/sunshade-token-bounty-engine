@@ -119,6 +119,15 @@ describe('BountyEngineClient SDK Tests', () => {
       },
     });
 
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/mint/efficiency',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-user-id': 'usr-assignee',
+        }),
+      })
+    );
+
     // 3. burnUtilityTokens preserves caller identity when burning a target wallet (SEC-0001)
     await client.burnUtilityTokens({
       userId: 'usr-target-bob',
@@ -131,6 +140,49 @@ describe('BountyEngineClient SDK Tests', () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           'x-user-id': 'usr-client', // NOT usr-target-bob!
+        }),
+      })
+    );
+  });
+
+  it('rejects burnUtilityTokens when caller identity is omitted without admin key (BUG-0001)', async () => {
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      apiKey: 'test-api-key',
+    });
+
+    await expect(
+      client.burnUtilityTokens({
+        userId: 'usr-target',
+        amount: 50,
+        serviceName: 'test-service',
+      })
+    ).rejects.toThrow('Caller identity (callerUserId or client userId) is required for token burn');
+  });
+
+  it('allows burnUtilityTokens without caller identity when adminKey is provided', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true }),
+    });
+
+    const client = new BountyEngineClient({
+      baseUrl: 'http://localhost:4000',
+      adminKey: 'test-admin-key',
+      fetchFn: mockFetch as any,
+    });
+
+    await client.burnUtilityTokens({
+      userId: 'usr-target',
+      amount: 50,
+      serviceName: 'test-service',
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://localhost:4000/api/v1/exchange/burn',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'x-admin-key': 'test-admin-key',
         }),
       })
     );

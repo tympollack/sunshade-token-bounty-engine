@@ -177,6 +177,11 @@ export class BountyEngineClient {
     callerUserId?: string;
   }): Promise<UtilityBurnResult> {
     const callerId = params.callerUserId || this.userId;
+    if (!callerId && !this.adminKey) {
+      throw new Error(
+        'Caller identity (callerUserId or client userId) is required for token burn unless authenticated with adminKey.'
+      );
+    }
     const customHeaders: Record<string, string> = {};
     if (callerId) {
       customHeaders['x-user-id'] = callerId;
