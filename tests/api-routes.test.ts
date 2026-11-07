@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/api/app';
-import { LedgerGateway } from '../src/db/ledgerGateway';
+import { LedgerGateway, DatabaseError } from '../src/db/ledgerGateway';
 import type { UserTokenWallet } from '../src/types';
 
 describe('Bounty Engine API Routes Integration Tests', () => {
@@ -268,6 +268,44 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.upkeepTokensMinted).toBe(3000);
       expect(res.body.bountyTokensMinted).toBe(0); // Correctly reports 0 minted this request
+    });
+
+    it('handles concurrent retry unique constraint violation idempotently via DatabaseError (SEC-0005)', async () => {
+      // Both lookup checks return false (race condition before insert)
+      (mockGateway.findExistingWorkItemAward as any).mockResolvedValue(false);
+
+      // creditWorkRebate throws DatabaseError with 23505 unique constraint violation
+      (mockGateway.creditWorkRebate as any).mockRejectedValue(
+        new DatabaseError(
+          'duplicate key value violates unique constraint "idx_hub_tokens_ledger_work_item_stream"',
+          {
+            code: '23505',
+            details:
+              'Key ((metadata ->> work_item_id), (metadata ->> stream))=(task-concurrent, personal_bounty) already exists.',
+          }
+        )
+      );
+
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
+        .send({
+          item: {
+            id: 'task-concurrent',
+            status: 'complete',
+            assignee_id: 'usr-42',
+            metadata: {
+              commit_sha: 'sha-abcdef0123456789',
+              bounty_hours: 0.20,
+            },
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.upkeepTokensMinted).toBe(0);
+      expect(res.body.bountyTokensMinted).toBe(0);
     });
 
     it('returns zero bounty tokens for unassigned tasks (BUG-0005)', async () => {

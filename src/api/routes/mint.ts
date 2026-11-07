@@ -13,8 +13,21 @@ import {
   MIN_NEGLECT_MULTIPLIER,
   MAX_NEGLECT_MULTIPLIER,
 } from '../../core/constants';
-import { LedgerGateway } from '../../db/ledgerGateway';
+import { LedgerGateway, DatabaseError } from '../../db/ledgerGateway';
 import type { WorkItemRecord, MintEfficiencyResult } from '../../types';
+
+function isUniqueConstraintViolation(err: any): boolean {
+  if (!err) return false;
+  if (err instanceof DatabaseError && err.code === '23505') return true;
+  if (err.code === '23505') return true;
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    msg.includes('23505') ||
+    msg.includes('unique') ||
+    msg.includes('duplicate') ||
+    msg.includes('idx_hub_tokens_ledger_work_item_stream')
+  );
+}
 
 const MintEfficiencySchema = z.object({
   item: z.object({
@@ -206,13 +219,7 @@ export function createMintRouter(gateway: LedgerGateway): Router {
         );
         upkeepTokensMinted = upkeepAmount;
       } catch (err: any) {
-        if (
-          err.code === '23505' ||
-          (err.message &&
-            (err.message.includes('unique') ||
-              err.message.includes('duplicate') ||
-              err.message.includes('idx_hub_tokens_ledger_work_item_stream')))
-        ) {
+        if (isUniqueConstraintViolation(err)) {
           upkeepTokensMinted = 0;
         } else {
           throw err;
@@ -280,13 +287,7 @@ export function createMintRouter(gateway: LedgerGateway): Router {
         );
         personalTokensMinted = bountyTokens;
       } catch (err: any) {
-        if (
-          err.code === '23505' ||
-          (err.message &&
-            (err.message.includes('unique') ||
-              err.message.includes('duplicate') ||
-              err.message.includes('idx_hub_tokens_ledger_work_item_stream')))
-        ) {
+        if (isUniqueConstraintViolation(err)) {
           personalTokensMinted = 0;
         } else {
           throw err;

@@ -2,6 +2,25 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseAdmin } from './supabaseClient';
 import type { UserTokenWallet, HubTokenLedgerEntry } from '../types';
 
+export class DatabaseError extends Error {
+  code?: string;
+  details?: string;
+  hint?: string;
+
+  constructor(
+    message: string,
+    pgError?: { code?: string; details?: string; hint?: string; message?: string }
+  ) {
+    super(message);
+    this.name = 'DatabaseError';
+    if (pgError) {
+      this.code = pgError.code;
+      this.details = pgError.details;
+      this.hint = pgError.hint;
+    }
+  }
+}
+
 export class LedgerGateway {
   private client: SupabaseClient;
 
@@ -20,7 +39,7 @@ export class LedgerGateway {
       .maybeSingle();
 
     if (error) {
-      throw new Error(`Failed to fetch wallet for user ${userId}: ${error.message}`);
+      throw new DatabaseError(`Failed to fetch wallet for user ${userId}: ${error.message}`, error);
     }
 
     if (!data) {
@@ -86,7 +105,7 @@ export class LedgerGateway {
     });
 
     if (error) {
-      throw new Error(`Failed to credit work rebate to user ${userId}: ${error.message}`);
+      throw new DatabaseError(`Failed to credit work rebate to user ${userId}: ${error.message}`, error);
     }
 
     return data as UserTokenWallet;
@@ -102,7 +121,7 @@ export class LedgerGateway {
     });
 
     if (error) {
-      throw new Error(`Failed to vest work rebates for user ${userId}: ${error.message}`);
+      throw new DatabaseError(`Failed to vest work rebates for user ${userId}: ${error.message}`, error);
     }
 
     return data as UserTokenWallet;
@@ -121,7 +140,7 @@ export class LedgerGateway {
     });
 
     if (error) {
-      throw new Error(`Failed to convert rebate tokens for user ${userId}: ${error.message}`);
+      throw new DatabaseError(`Failed to convert rebate tokens for user ${userId}: ${error.message}`, error);
     }
 
     return {
@@ -150,7 +169,7 @@ export class LedgerGateway {
     });
 
     if (error) {
-      throw new Error(`Failed to burn utility tokens for user ${userId}: ${error.message}`);
+      throw new DatabaseError(`Failed to burn utility tokens for user ${userId}: ${error.message}`, error);
     }
 
     return data as UserTokenWallet;
@@ -171,8 +190,9 @@ export class LedgerGateway {
       .limit(1);
 
     if (error) {
-      throw new Error(
-        `Failed to query existing work item award for item ${workItemId} (${stream}): ${error.message}`
+      throw new DatabaseError(
+        `Failed to query existing work item award for item ${workItemId} (${stream}): ${error.message}`,
+        error
       );
     }
 
@@ -198,7 +218,7 @@ export class LedgerGateway {
     });
 
     if (error) {
-      throw new Error(`Failed to append transaction to hub_tokens_ledger: ${error.message}`);
+      throw new DatabaseError(`Failed to append transaction to hub_tokens_ledger: ${error.message}`, error);
     }
   }
 }
