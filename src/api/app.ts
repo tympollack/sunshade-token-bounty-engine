@@ -35,7 +35,7 @@ export function createApp(options?: CreateAppOptions): Express {
   app.use('/api/v1/bounties', createBountiesRouter());
   app.use('/api/v1/exchange', createExchangeRouter(gateway));
   app.use('/api/v1/wallets', createWalletsRouter(gateway));
-  app.use('/api/v1/escrow', createEscrowRouter());
+  app.use('/api/v1/escrow', createEscrowRouter(gateway));
 
   // Global Error Handler
   app.use(errorHandler);

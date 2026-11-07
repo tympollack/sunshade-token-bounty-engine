@@ -99,4 +99,38 @@ describe('Exchange Service (1.25x Utility Bonus & Escrow Waterfall)', () => {
     expect(waterfall.payouts[0].status).toBe('approved');
     expect(waterfall.payouts[0].payoutCents).toBe(12500);
   });
+
+  it('prevents split claims in the same batch from bypassing the $599 tax gate (SEC-0008)', () => {
+    // 60,000 tokens = $125.00 (12,500 cents).
+    // Claim 1: 192,000 tokens = $400.00 (40,000 cents) -> under $599 threshold
+    // Claim 2: 144,000 tokens = $300.00 (30,000 cents) -> cumulative = $700.00 >= $599 threshold
+    const waterfall = processEscrowWaterfall({
+      period: '2026-11',
+      grossRevenueCents: 10000000,
+      escrowPercentage: 0.30,
+      claims: [
+        {
+          userId: 'usr-split',
+          tokensToRedeem: 192000,
+          paypalEmail: 'split@example.com',
+          ytdFiatRedeemedCents: 0,
+          taxComplianceVerified: false,
+        },
+        {
+          userId: 'usr-split',
+          tokensToRedeem: 144000,
+          paypalEmail: 'split@example.com',
+          ytdFiatRedeemedCents: 0,
+          taxComplianceVerified: false,
+        },
+      ],
+    });
+
+    expect(waterfall.payouts).toHaveLength(2);
+    expect(waterfall.payouts[0].status).toBe('approved');
+    expect(waterfall.payouts[0].payoutCents).toBe(40000);
+    expect(waterfall.payouts[1].status).toBe('tax_compliance_locked');
+    expect(waterfall.payouts[1].reason).toContain('IRS 1099-NEC threshold ($599.00) reached');
+    expect(waterfall.totalFiatApprovedCents).toBe(40000);
+  });
 });

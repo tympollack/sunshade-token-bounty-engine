@@ -9,6 +9,8 @@ export const PRESTIGE_CAP_TOKENS = 1000000000; // 1 Billion tokens career cap (~
 
 export const TRIAGE_UPKEEP_HOURS_PER_ITEM = 0.05; // 3 minutes = 3,000 tokens
 export const AUTONOMOUS_BOUNTY_HOURS_PER_ITEM = 0.20; // 12 minutes = 12,000 tokens baseline
+export const MAX_BOUNTY_HOURS_PER_ITEM = 40.0; // Maximum allowed hours per single work item
+export const MAX_BOUNTY_TOKENS_PER_ITEM = 8400000; // 40h * 60,000 * 3.5 max neglect multiplier ceiling
 
 export const MIN_NEGLECT_MULTIPLIER = 1.0;
 export const MAX_NEGLECT_MULTIPLIER = 3.5;

@@ -43,9 +43,24 @@ export function createExchangeRouter(gateway: LedgerGateway): Router {
   router.post('/burn', async (req: Request, res: Response): Promise<void> => {
     const parsed = BurnUtilitySchema.parse(req.body);
 
-    // Cross-user authorization check: prevent burning another user's tokens unless authorized
+    // Cross-user authorization check: caller identification is required unless authenticated as admin/service
     const callerUserId = req.headers['x-user-id'] as string | undefined;
-    const hasAdminOrServiceRole = req.headers['x-role'] === 'admin' || req.headers['x-service-role'] === 'true';
+    const adminKey = req.headers['x-admin-key'] as string | undefined;
+    const configuredAdminKey = process.env.ADMIN_OVERRIDE_KEY;
+    const hasAdminOrServiceRole =
+      (configuredAdminKey && adminKey === configuredAdminKey) ||
+      (process.env.NODE_ENV !== 'production' &&
+        (req.headers['x-role'] === 'admin' ||
+          req.headers['x-service-role'] === 'true' ||
+          adminKey === 'sunshade-test-admin-key'));
+
+    if (!callerUserId && !hasAdminOrServiceRole) {
+      res.status(401).json({
+        success: false,
+        error: 'Missing caller user identification header (x-user-id) or administrative authorization.',
+      });
+      return;
+    }
 
     if (callerUserId && callerUserId !== parsed.userId && !hasAdminOrServiceRole) {
       res.status(403).json({

@@ -44,6 +44,7 @@ export function processEscrowWaterfall(options: EscrowWaterfallOptions): EscrowW
   let totalTokensRequested = 0;
 
   const payouts: EscrowWaterfallPayout[] = [];
+  const userCumulativeYtdCents = new Map<string, number>();
 
   // Conversion rate baseline: 60,000 tokens = $125.00 (12,500 cents) -> 1 token = 12500 / 60000 = ~0.2083 cents
   const CENTS_PER_TOKEN = 12500 / TOKEN_PER_HOUR;
@@ -63,18 +64,19 @@ export function processEscrowWaterfall(options: EscrowWaterfallOptions): EscrowW
       continue;
     }
 
-    const ytdCents = claim.ytdFiatRedeemedCents ?? 0;
+    const initialYtd = claim.ytdFiatRedeemedCents ?? 0;
+    const currentYtd = userCumulativeYtdCents.get(claim.userId) ?? initialYtd;
     const isTaxVerified = claim.taxComplianceVerified ?? false;
 
     // IRS 1099-NEC Threshold Gate ($599.00 / 59,900 cents)
-    if (ytdCents + requiredCents >= IRS_1099_NEC_THRESHOLD_CENTS && !isTaxVerified) {
+    if (currentYtd + requiredCents >= IRS_1099_NEC_THRESHOLD_CENTS && !isTaxVerified) {
       payouts.push({
         userId: claim.userId,
         tokensRedeemed: 0,
         payoutCents: 0,
         paypalEmail: claim.paypalEmail,
         status: 'tax_compliance_locked',
-        reason: `IRS 1099-NEC threshold ($599.00) reached. YTD: $${(ytdCents / 100).toFixed(2)}, Claim: $${(requiredCents / 100).toFixed(2)}. Tax compliance verification required.`,
+        reason: `IRS 1099-NEC threshold ($599.00) reached. YTD: $${(currentYtd / 100).toFixed(2)}, Claim: $${(requiredCents / 100).toFixed(2)}. Tax compliance verification required.`,
       });
       continue;
     }
@@ -93,6 +95,7 @@ export function processEscrowWaterfall(options: EscrowWaterfallOptions): EscrowW
 
     remainingPoolCents -= requiredCents;
     totalFiatApprovedCents += requiredCents;
+    userCumulativeYtdCents.set(claim.userId, currentYtd + requiredCents);
 
     payouts.push({
       userId: claim.userId,

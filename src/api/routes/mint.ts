@@ -6,6 +6,8 @@ import {
   TOKEN_PER_HOUR,
   TRIAGE_UPKEEP_HOURS_PER_ITEM,
   AUTONOMOUS_BOUNTY_HOURS_PER_ITEM,
+  MAX_BOUNTY_HOURS_PER_ITEM,
+  MAX_BOUNTY_TOKENS_PER_ITEM,
   SYSTEM_ECOSYSTEM_POOL_USER_ID,
   COMPLETION_STATUSES,
   MIN_NEGLECT_MULTIPLIER,
@@ -16,7 +18,7 @@ import type { WorkItemRecord, MintEfficiencyResult } from '../../types';
 
 const MintEfficiencySchema = z.object({
   item: z.object({
-    id: z.string(),
+    id: z.string().min(1, 'Work item ID cannot be empty'),
     project_id: z.string().optional(),
     tenant_id: z.string().optional(),
     title: z.string().optional(),
@@ -32,6 +34,25 @@ const MintEfficiencySchema = z.object({
   neglectMultiplier: z.number().optional(),
   vested: z.boolean().optional(),
 });
+
+function isAuthorizedAdminOrService(req: Request): boolean {
+  const adminKey = req.headers['x-admin-key'] as string | undefined;
+  const configuredAdminKey = process.env.ADMIN_OVERRIDE_KEY;
+
+  if (configuredAdminKey) {
+    return adminKey === configuredAdminKey;
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    return (
+      adminKey === 'sunshade-test-admin-key' ||
+      req.headers['x-admin-override'] === 'true' ||
+      req.headers['x-role'] === 'admin'
+    );
+  }
+
+  return false;
+}
 
 export function createMintRouter(gateway: LedgerGateway): Router {
   const router = Router();
@@ -89,17 +110,60 @@ export function createMintRouter(gateway: LedgerGateway): Router {
     const claimantId = parsed.claimantUserId || item.assignee_id;
     const isVested = parsed.vested !== false;
 
-    // Caller authorization check: callers cannot mint for another user unless admin
+    // Caller authorization check: caller must be identified or authenticated as admin
     const callerUserId = req.headers['x-user-id'] as string | undefined;
-    const callerRole = (req.headers['x-role'] as string | undefined) || '';
-    const isAdmin = callerRole === 'admin' || req.headers['x-admin-override'] === 'true';
+    const isAdmin = isAuthorizedAdminOrService(req);
 
-    if (callerUserId && !isAdmin && claimantId && claimantId !== callerUserId) {
-      res.status(403).json({
-        success: false,
-        error: 'Caller is not authorized to mint tokens for another claimant user ID.',
-      });
-      return;
+    if (claimantId && !isAdmin) {
+      if (!callerUserId) {
+        res.status(401).json({
+          success: false,
+          error: 'Caller identification header (x-user-id) or administrative authorization is required to claim personal bounty yield.',
+        });
+        return;
+      }
+      if (callerUserId !== claimantId) {
+        res.status(403).json({
+          success: false,
+          error: 'Caller is not authorized to mint tokens for another claimant user ID.',
+        });
+        return;
+      }
+    }
+
+    // Calculate neglect multiplier clamped [1.0, 3.5]
+    let multiplier = parsed.neglectMultiplier;
+    if (multiplier === undefined) {
+      const calc = calculateNeglectMultiplier(item.created_at, item.updated_at);
+      multiplier = calc.multiplier;
+    }
+    multiplier = Math.min(MAX_NEGLECT_MULTIPLIER, Math.max(MIN_NEGLECT_MULTIPLIER, multiplier));
+
+    // Pre-validate bounty tokens and hours BEFORE any database credits
+    const isFixedReward =
+      typeof item.metadata?.fixed_reward_tokens === 'number' && item.metadata.fixed_reward_tokens > 0;
+
+    let bountyTokens = 0;
+    if (isFixedReward) {
+      const rawFixed = Number(item.metadata!.fixed_reward_tokens);
+      if (isNaN(rawFixed) || rawFixed <= 0) {
+        res.status(400).json({ success: false, error: 'Invalid or non-positive fixed reward tokens specified.' });
+        return;
+      }
+      bountyTokens = Math.min(MAX_BOUNTY_TOKENS_PER_ITEM, Math.floor(rawFixed));
+    } else {
+      const rawHours = Number(
+        item.metadata?.bounty_hours ?? item.metadata?.estimated_hours ?? AUTONOMOUS_BOUNTY_HOURS_PER_ITEM
+      );
+      if (isNaN(rawHours) || rawHours <= 0) {
+        res.status(400).json({ success: false, error: 'Invalid or non-positive bounty hours specified.' });
+        return;
+      }
+      const boundedHours = Math.min(MAX_BOUNTY_HOURS_PER_ITEM, Math.max(0.1, rawHours));
+      bountyTokens = Math.min(
+        MAX_BOUNTY_TOKENS_PER_ITEM,
+        Math.floor(boundedHours * TOKEN_PER_HOUR * multiplier)
+      );
     }
 
     // Check for prior mints to prevent duplicate token awards on retries
@@ -124,21 +188,30 @@ export function createMintRouter(gateway: LedgerGateway): Router {
     }
 
     // 1. Triage Upkeep Stream (0.05 hrs = 3,000 tokens)
-    let upkeepTokens = 0;
+    let upkeepTokensMinted = 0;
     if (!alreadyUpkeepMinted) {
-      upkeepTokens = Math.floor(TRIAGE_UPKEEP_HOURS_PER_ITEM * TOKEN_PER_HOUR);
-      await gateway.creditWorkRebate(
-        systemPoolId,
-        upkeepTokens,
-        `Triage Upkeep Stream for item ${item.id}`,
-        true,
-        {
-          stream: 'triage_upkeep',
-          work_item_id: item.id,
-          project_id: item.project_id,
-          tenant_id: item.tenant_id,
+      const upkeepAmount = Math.floor(TRIAGE_UPKEEP_HOURS_PER_ITEM * TOKEN_PER_HOUR);
+      try {
+        await gateway.creditWorkRebate(
+          systemPoolId,
+          upkeepAmount,
+          `Triage Upkeep Stream for item ${item.id}`,
+          true,
+          {
+            stream: 'triage_upkeep',
+            work_item_id: item.id,
+            project_id: item.project_id,
+            tenant_id: item.tenant_id,
+          }
+        );
+        upkeepTokensMinted = upkeepAmount;
+      } catch (err: any) {
+        if (err.message && (err.message.includes('unique') || err.message.includes('duplicate'))) {
+          upkeepTokensMinted = 0;
+        } else {
+          throw err;
         }
-      );
+      }
     }
 
     // 2. Personal Bounty Stream
@@ -154,7 +227,7 @@ export function createMintRouter(gateway: LedgerGateway): Router {
         systemPoolUserId: systemPoolId,
         isEligibleForUpkeep: true,
         isEligibleForBounty: false,
-        upkeepTokensMinted: upkeepTokens,
+        upkeepTokensMinted: upkeepTokensMinted,
         bountyTokensMinted: 0,
         proof,
         reason: proof.reason || 'Artifact proof is required to unlock personal autonomous bounty stream.',
@@ -172,7 +245,7 @@ export function createMintRouter(gateway: LedgerGateway): Router {
         systemPoolUserId: systemPoolId,
         isEligibleForUpkeep: true,
         isEligibleForBounty: false,
-        upkeepTokensMinted: upkeepTokens,
+        upkeepTokensMinted: upkeepTokensMinted,
         bountyTokensMinted: 0,
         proof,
         reason: 'Work item is not assigned to a claimant; personal bounty stream requires a valid assignee.',
@@ -180,51 +253,33 @@ export function createMintRouter(gateway: LedgerGateway): Router {
       return;
     }
 
-    // Calculate neglect multiplier clamped [1.0, 3.5]
-    let multiplier = parsed.neglectMultiplier;
-    if (multiplier === undefined) {
-      const calc = calculateNeglectMultiplier(item.created_at, item.updated_at);
-      multiplier = calc.multiplier;
-    }
-    multiplier = Math.min(MAX_NEGLECT_MULTIPLIER, Math.max(MIN_NEGLECT_MULTIPLIER, multiplier));
-
-    // Calculate bounty tokens, honoring fixed_reward_tokens and bounding hours
-    const isFixedReward =
-      typeof item.metadata?.fixed_reward_tokens === 'number' && item.metadata.fixed_reward_tokens > 0;
-
-    let bountyTokens = 0;
-    if (isFixedReward) {
-      bountyTokens = Math.floor(item.metadata!.fixed_reward_tokens!);
-    } else {
-      const rawHours = Number(
-        item.metadata?.bounty_hours ?? item.metadata?.estimated_hours ?? AUTONOMOUS_BOUNTY_HOURS_PER_ITEM
-      );
-      if (isNaN(rawHours) || rawHours <= 0) {
-        res.status(400).json({ success: false, error: 'Invalid or non-positive bounty hours specified.' });
-        return;
-      }
-      // Bound hours to maximum 40.0h per task to prevent unbounded ledger mints
-      const boundedHours = Math.min(40.0, Math.max(0.1, rawHours));
-      bountyTokens = Math.floor(boundedHours * TOKEN_PER_HOUR * multiplier);
-    }
-
+    let personalTokensMinted = 0;
     let updatedWallet;
     if (!alreadyPersonalMinted && bountyTokens > 0) {
-      updatedWallet = await gateway.creditWorkRebate(
-        claimantId,
-        bountyTokens,
-        `Autonomous Personal Bounty for item ${item.id}`,
-        isVested,
-        {
-          stream: 'personal_bounty',
-          work_item_id: item.id,
-          project_id: item.project_id,
-          tenant_id: item.tenant_id,
-          proof_type: proof.proofType,
-          proof_ref: proof.proofRef,
-          neglect_multiplier: multiplier,
+      try {
+        updatedWallet = await gateway.creditWorkRebate(
+          claimantId,
+          bountyTokens,
+          `Autonomous Personal Bounty for item ${item.id}`,
+          isVested,
+          {
+            stream: 'personal_bounty',
+            work_item_id: item.id,
+            project_id: item.project_id,
+            tenant_id: item.tenant_id,
+            proof_type: proof.proofType,
+            proof_ref: proof.proofRef,
+            neglect_multiplier: multiplier,
+          }
+        );
+        personalTokensMinted = bountyTokens;
+      } catch (err: any) {
+        if (err.message && (err.message.includes('unique') || err.message.includes('duplicate'))) {
+          personalTokensMinted = 0;
+        } else {
+          throw err;
         }
-      );
+      }
     }
 
     res.json({
@@ -236,8 +291,8 @@ export function createMintRouter(gateway: LedgerGateway): Router {
       systemPoolUserId: systemPoolId,
       isEligibleForUpkeep: true,
       isEligibleForBounty: true,
-      upkeepTokensMinted: upkeepTokens,
-      bountyTokensMinted: bountyTokens,
+      upkeepTokensMinted: upkeepTokensMinted,
+      bountyTokensMinted: personalTokensMinted,
       proof,
       walletState: updatedWallet,
     } satisfies MintEfficiencyResult);

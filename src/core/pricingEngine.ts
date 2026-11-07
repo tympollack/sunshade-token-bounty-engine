@@ -5,6 +5,8 @@ import {
   MAX_NEGLECT_MULTIPLIER,
   NEGLECT_THRESHOLD_DAYS,
   TRIAGE_UPKEEP_HOURS_PER_ITEM,
+  MAX_BOUNTY_HOURS_PER_ITEM,
+  MAX_BOUNTY_TOKENS_PER_ITEM,
 } from './constants';
 import type { PricingQuote, WorkItemRecord } from '../types';
 
@@ -53,9 +55,9 @@ export function calculateBountyPricing(
   const meta = item.metadata || {};
   const isFixedReward = typeof meta.fixed_reward_tokens === 'number' && meta.fixed_reward_tokens > 0;
 
-  // Base hours derivation
+  // Base hours derivation bounded to [0.1, 40.0]
   const rawHours = meta.bounty_hours ?? meta.estimated_hours ?? 1.0;
-  const baseHours = Math.max(0.1, Number(rawHours));
+  const baseHours = Math.min(MAX_BOUNTY_HOURS_PER_ITEM, Math.max(0.1, Number(rawHours)));
 
   const { multiplier, daysNeglected } = calculateNeglectMultiplier(
     item.created_at || meta.created_at,
@@ -65,10 +67,13 @@ export function calculateBountyPricing(
 
   let bountyTokens: number;
   if (isFixedReward) {
-    bountyTokens = Math.floor(meta.fixed_reward_tokens!);
+    bountyTokens = Math.min(MAX_BOUNTY_TOKENS_PER_ITEM, Math.floor(meta.fixed_reward_tokens!));
   } else {
-    // 60,000 tokens/hr * baseHours * neglectMultiplier
-    bountyTokens = Math.floor(baseHours * TOKEN_PER_HOUR * multiplier);
+    // 60,000 tokens/hr * baseHours * neglectMultiplier, bounded to maximum single task ceiling
+    bountyTokens = Math.min(
+      MAX_BOUNTY_TOKENS_PER_ITEM,
+      Math.floor(baseHours * TOKEN_PER_HOUR * multiplier)
+    );
   }
 
   const totalMinutes = Math.max(1, Math.round(baseHours * 60));

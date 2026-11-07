@@ -40,6 +40,10 @@ export function assertRunnerWeeklyCapacity(options: CapacityCheckOptions): Capac
   const rawTotalHours = existingWeeklyHours + newTaskHours;
   const projectedTotalHours = Number(rawTotalHours.toFixed(2));
   const exceedsCapacity = rawTotalHours > effectiveCapacityCeiling;
+  const displayProjectedHours =
+    rawTotalHours > effectiveCapacityCeiling && projectedTotalHours <= effectiveCapacityCeiling
+      ? Number(rawTotalHours.toFixed(4))
+      : projectedTotalHours;
 
   if (exceedsCapacity && !allowOverride) {
     return {
@@ -53,7 +57,7 @@ export function assertRunnerWeeklyCapacity(options: CapacityCheckOptions): Capac
       effectiveCapacityCeiling,
       isPermitted: false,
       isOverridden: false,
-      rejectionReason: `Runner weekly capacity exceeded for week ${isoWeek}. Projected: ${projectedTotalHours}h, Allowed: ${effectiveCapacityCeiling}h (${WEEKLY_SOVEREIGN_HOURS_CAP}h cap + ${clampedFlexBank}h flex bank).`,
+      rejectionReason: `Runner weekly capacity exceeded for week ${isoWeek}. Projected: ${displayProjectedHours}h, Allowed: ${effectiveCapacityCeiling}h (${WEEKLY_SOVEREIGN_HOURS_CAP}h cap + ${clampedFlexBank}h flex bank).`,
     };
   }
 

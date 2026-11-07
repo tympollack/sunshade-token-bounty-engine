@@ -12,6 +12,26 @@ const ClaimSchema = z.object({
   allowOverride: z.boolean().optional(),
 });
 
+function isAuthorizedAdmin(req: Request): boolean {
+  const adminKey = req.headers['x-admin-key'] as string | undefined;
+  const configuredAdminKey = process.env.ADMIN_OVERRIDE_KEY;
+
+  if (configuredAdminKey) {
+    return adminKey === configuredAdminKey;
+  }
+
+  // In non-production environments, allow test admin key or header
+  if (process.env.NODE_ENV !== 'production') {
+    return (
+      adminKey === 'sunshade-test-admin-key' ||
+      req.headers['x-admin-override'] === 'true' ||
+      req.headers['x-role'] === 'admin'
+    );
+  }
+
+  return false;
+}
+
 export function createBountiesRouter(): Router {
   const router = Router();
 
@@ -45,11 +65,11 @@ export function createBountiesRouter(): Router {
     const parsed = ClaimSchema.parse(req.body);
 
     // Administrative override gate: only allow override when explicitly authorized
-    const hasAdminRole = req.headers['x-admin-override'] === 'true' || req.headers['x-role'] === 'admin';
+    const hasAdminRole = isAuthorizedAdmin(req);
     if (parsed.allowOverride && !hasAdminRole) {
       res.status(403).json({
         success: false,
-        error: 'Unauthorized: allowOverride requires administrative authorization headers (x-admin-override or x-role=admin).',
+        error: 'Unauthorized: allowOverride requires administrative authorization (x-admin-key or admin role).',
       });
       return;
     }

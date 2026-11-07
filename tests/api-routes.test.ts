@@ -129,26 +129,36 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.capacity.isPermitted).toBe(true);
     });
 
-    it('rejects allowOverride when caller lacks admin privileges (SEC-0004)', async () => {
-      const res = await request(app)
-        .post('/api/v1/bounties/claim')
-        .set('x-api-key', TEST_API_KEY)
-        .send({
-          claimantUserId: 'usr-runner',
-          newTaskHours: 5.0,
-          existingWeeklyHours: 20.0,
-          allowOverride: true,
-        });
+    it('rejects allowOverride when caller lacks admin privileges (SEC-0001)', async () => {
+      const origEnv = process.env.NODE_ENV;
+      try {
+        process.env.NODE_ENV = 'production';
+        process.env.ADMIN_OVERRIDE_KEY = 'real-admin-secret-key';
 
-      expect(res.status).toBe(403);
-      expect(res.body.error).toContain('allowOverride requires administrative authorization');
+        const res = await request(app)
+          .post('/api/v1/bounties/claim')
+          .set('x-api-key', TEST_API_KEY)
+          .set('x-role', 'admin') // Client header without secret
+          .send({
+            claimantUserId: 'usr-runner',
+            newTaskHours: 5.0,
+            existingWeeklyHours: 20.0,
+            allowOverride: true,
+          });
+
+        expect(res.status).toBe(403);
+        expect(res.body.error).toContain('allowOverride requires administrative authorization');
+      } finally {
+        process.env.NODE_ENV = origEnv;
+        delete process.env.ADMIN_OVERRIDE_KEY;
+      }
     });
 
     it('allows allowOverride when caller has admin authorization header', async () => {
       const res = await request(app)
         .post('/api/v1/bounties/claim')
         .set('x-api-key', TEST_API_KEY)
-        .set('x-admin-override', 'true')
+        .set('x-admin-key', 'sunshade-test-admin-key')
         .send({
           claimantUserId: 'usr-runner',
           newTaskHours: 5.0,
@@ -186,6 +196,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       const res = await request(app)
         .post('/api/v1/mint/efficiency')
         .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
         .send({
           item: {
             id: 'task-verified',
@@ -214,6 +225,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       const res = await request(app)
         .post('/api/v1/mint/efficiency')
         .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
         .send({
           item: {
             id: 'task-repeat',
@@ -228,6 +240,34 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.upkeepTokensMinted).toBe(0);
       expect(res.body.bountyTokensMinted).toBe(0);
       expect(res.body.reason).toContain('already minted in prior transaction (idempotent no-op)');
+    });
+
+    it('does not overstate bounty minted on partial retry (BUG-0004)', async () => {
+      // Upkeep award is missing, but personal award was already minted
+      (mockGateway.findExistingWorkItemAward as any).mockImplementation((_id: string, stream: string) => {
+        return Promise.resolve(stream === 'personal_bounty');
+      });
+
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
+        .send({
+          item: {
+            id: 'task-partial-retry',
+            status: 'complete',
+            assignee_id: 'usr-42',
+            metadata: {
+              commit_sha: 'sha-abcdef0123456789',
+              bounty_hours: 0.20,
+            },
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.upkeepTokensMinted).toBe(3000);
+      expect(res.body.bountyTokensMinted).toBe(0); // Correctly reports 0 minted this request
     });
 
     it('returns zero bounty tokens for unassigned tasks (BUG-0005)', async () => {
@@ -256,6 +296,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       const res = await request(app)
         .post('/api/v1/mint/efficiency')
         .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
         .send({
           item: {
             id: 'task-fixed-reward',
@@ -277,6 +318,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       const res = await request(app)
         .post('/api/v1/mint/efficiency')
         .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-impostor')
         .send({
           item: {
             id: 'task-spoof',
@@ -291,24 +333,45 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.error).toContain('Claimant user ID does not match work item assignee');
     });
 
-    it('rejects invalid or non-positive bounty hours (SEC-0006)', async () => {
+    it('rejects unauthenticated cross-user mint when x-user-id is omitted (SEC-0003)', async () => {
       const res = await request(app)
         .post('/api/v1/mint/efficiency')
         .set('x-api-key', TEST_API_KEY)
+        // No x-user-id and no admin authorization
         .send({
           item: {
-            id: 'task-neg-hours',
+            id: 'task-unauth-mint',
+            status: 'complete',
+            assignee_id: 'usr-victim',
+            metadata: { commit_sha: 'sha-abcdef0123456789' },
+          },
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toContain('Caller identification header (x-user-id)');
+    });
+
+    it('validates bounty hours upfront before minting upkeep pool tokens (BUG-0003)', async () => {
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
+        .send({
+          item: {
+            id: 'task-invalid-hours',
             status: 'complete',
             assignee_id: 'usr-42',
             metadata: {
               commit_sha: 'sha-abcdef0123456789',
-              bounty_hours: -5.0,
+              bounty_hours: -5.0, // Invalid
             },
           },
         });
 
       expect(res.status).toBe(400);
       expect(res.body.error).toContain('Invalid or non-positive bounty hours');
+      // Upkeep credit must NOT have been called
+      expect(mockGateway.creditWorkRebate).not.toHaveBeenCalled();
     });
   });
 
@@ -328,10 +391,11 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.bonusRatio).toBe(1.25);
     });
 
-    it('POST /api/v1/exchange/burn burns utility tokens for service fees', async () => {
+    it('POST /api/v1/exchange/burn burns utility tokens for authorized user', async () => {
       const res = await request(app)
         .post('/api/v1/exchange/burn')
         .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-42')
         .send({
           userId: 'usr-42',
           amount: 10000,
@@ -350,7 +414,22 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       );
     });
 
-    it('rejects burning another user tokens without authorization (SEC-0003)', async () => {
+    it('rejects burn when caller header x-user-id is missing (SEC-0002)', async () => {
+      const res = await request(app)
+        .post('/api/v1/exchange/burn')
+        .set('x-api-key', TEST_API_KEY)
+        // No x-user-id
+        .send({
+          userId: 'usr-victim',
+          amount: 5000,
+          serviceName: 'sticker_burn',
+        });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toContain('Missing caller user identification header (x-user-id)');
+    });
+
+    it('rejects burning another user tokens without authorization (SEC-0002)', async () => {
       const res = await request(app)
         .post('/api/v1/exchange/burn')
         .set('x-api-key', TEST_API_KEY)
@@ -376,7 +455,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.wallet.utility_balance).toBe(50000);
     });
 
-    it('POST /api/v1/escrow/waterfall calculates monthly revenue waterfall', async () => {
+    it('POST /api/v1/escrow/waterfall calculates monthly revenue waterfall and enriches wallet tax info (SEC-0007)', async () => {
       const res = await request(app)
         .post('/api/v1/escrow/waterfall')
         .set('x-api-key', TEST_API_KEY)
@@ -392,6 +471,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.result.totalFiatApprovedCents).toBe(12500); // $125.00
+      expect(mockGateway.getUserWallet).toHaveBeenCalledWith('usr-42');
     });
   });
 });

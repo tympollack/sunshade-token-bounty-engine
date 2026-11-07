@@ -47,6 +47,7 @@ describe('Capacity Governor (20-Hour Weekly Sovereign Cap & Flex Bank)', () => {
 
     expect(res.isPermitted).toBe(false);
     expect(res.rejectionReason).toContain('Runner weekly capacity exceeded');
+    expect(res.rejectionReason).toContain('Projected: 23h');
   });
 
   it('rejects tasks when unrounded sum strictly exceeds cap even if rounded sum would equal cap', () => {
@@ -61,6 +62,7 @@ describe('Capacity Governor (20-Hour Weekly Sovereign Cap & Flex Bank)', () => {
 
     expect(res.isPermitted).toBe(false);
     expect(res.rejectionReason).toContain('Runner weekly capacity exceeded');
+    expect(res.rejectionReason).toContain('Projected: 20.001h');
   });
 
   it('permits tasks exceeding ceiling when allowOverride is explicitly set to true', () => {

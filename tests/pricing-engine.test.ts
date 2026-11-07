@@ -57,4 +57,19 @@ describe('Pricing Engine (Neglect Multipliers & 60k/hr Rates)', () => {
     expect(quote.isFixedReward).toBe(true);
     expect(quote.bountyTokens).toBe(250000);
   });
+
+  it('clamps hours exceeding 40.0h to the maximum single-task ceiling (ANALYSIS-0001)', () => {
+    const item: WorkItemRecord = {
+      id: 'task-huge',
+      status: 'todo',
+      created_at: new Date('2026-10-30T12:00:00Z').toISOString(),
+      metadata: {
+        bounty_hours: 50.0,
+      },
+    };
+
+    const quote = calculateBountyPricing(item, refDate);
+    expect(quote.baseHours).toBe(40.0);
+    expect(quote.bountyTokens).toBe(2400000); // 40.0 * 60,000 * 1.0
+  });
 });

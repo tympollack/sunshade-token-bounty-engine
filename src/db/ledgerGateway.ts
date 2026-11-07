@@ -132,6 +132,7 @@ export class LedgerGateway {
 
   /**
    * Burns utility tokens for in-app goods, stickers, Makerverse fees, or workspace grants.
+   * Executes atomically via the database RPC with row locking and ledger insertion.
    */
   async burnUtilityTokens(
     userId: string,
@@ -140,79 +141,46 @@ export class LedgerGateway {
     referenceId?: string,
     description?: string
   ): Promise<UserTokenWallet> {
-    const wallet = await this.getUserWallet(userId);
-    if (wallet.utility_balance < amount) {
-      throw new Error(
-        `Insufficient utility balance. Available: ${wallet.utility_balance}, Required: ${amount}`
-      );
-    }
-
-    // Deduct from wallet balance atomically with gte balance check
-    const { data: updatedWallet, error: updateErr } = await this.client
-      .from('user_token_wallets')
-      .update({
-        utility_balance: wallet.utility_balance - amount,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', userId)
-      .gte('utility_balance', amount)
-      .select('*')
-      .maybeSingle();
-
-    if (updateErr || !updatedWallet) {
-      throw new Error(`Insufficient utility balance or concurrent modification for user ${userId}.`);
-    }
-
-    // Insert burn entry into public.hub_tokens_ledger
-    const { error: ledgerErr } = await this.client.from('hub_tokens_ledger').insert({
-      user_id: userId,
-      token_class: 'utility_token',
-      transaction_type: 'ECOSYSTEM_SERVICE_BURN',
-      amount: -amount,
-      description: description || `Burned utility tokens for ${serviceName}`,
-      metadata: {
-        service_name: serviceName,
-        reference_id: referenceId,
-      },
+    const { data, error } = await this.client.rpc('burn_utility_tokens', {
+      p_user_id: userId,
+      p_amount: amount,
+      p_service_name: serviceName,
+      p_reference_id: referenceId ?? null,
+      p_description: description ?? null,
     });
 
-    if (ledgerErr) {
-      // Rollback wallet deduction if ledger insertion fails
-      await this.client
-        .from('user_token_wallets')
-        .update({
-          utility_balance: updatedWallet.utility_balance + amount,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('user_id', userId);
-      throw new Error(`Failed to record utility token burn in ledger: ${ledgerErr.message}`);
+    if (error) {
+      throw new Error(`Failed to burn utility tokens for user ${userId}: ${error.message}`);
     }
 
-    return updatedWallet as UserTokenWallet;
+    return data as UserTokenWallet;
   }
 
   /**
    * Checks whether an award has already been recorded for a specific work item and stream.
-   * Prevents duplicate minting on network retries.
+   * Prevents duplicate minting on network retries. Throws on database failure to avoid duplicate awards.
    */
   async findExistingWorkItemAward(
     workItemId: string,
     stream: 'personal_bounty' | 'triage_upkeep'
   ): Promise<boolean> {
-    try {
-      const { data, error } = await this.client
-        .from('hub_tokens_ledger')
-        .select('id')
-        .contains('metadata', { work_item_id: workItemId, stream })
-        .limit(1);
+    const { data, error } = await this.client
+      .from('hub_tokens_ledger')
+      .select('id')
+      .contains('metadata', { work_item_id: workItemId, stream })
+      .limit(1);
 
-      if (error || !Array.isArray(data)) {
-        return false;
-      }
-      return data.length > 0;
-    } catch {
-      return false;
+    if (error) {
+      throw new Error(
+        `Failed to query existing work item award for item ${workItemId} (${stream}): ${error.message}`
+      );
     }
+
+    if (!Array.isArray(data)) {
+      throw new Error(`Unexpected response when querying prior award for work item ${workItemId}.`);
+    }
+
+    return data.length > 0;
   }
 
   /**
