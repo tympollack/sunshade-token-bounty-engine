@@ -119,11 +119,18 @@ describe('BountyEngineClient SDK Tests', () => {
       },
     });
 
+    // 3. burnUtilityTokens preserves caller identity when burning a target wallet (SEC-0001)
+    await client.burnUtilityTokens({
+      userId: 'usr-target-bob',
+      amount: 50,
+      serviceName: 'test-service',
+    });
+
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://localhost:4000/api/v1/mint/efficiency',
+      'http://localhost:4000/api/v1/exchange/burn',
       expect.objectContaining({
         headers: expect.objectContaining({
-          'x-user-id': 'usr-assignee',
+          'x-user-id': 'usr-client', // NOT usr-target-bob!
         }),
       })
     );

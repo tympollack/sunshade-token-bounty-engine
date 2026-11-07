@@ -152,7 +152,7 @@ export class BountyEngineClient {
     rebateTokens: number;
     callerUserId?: string;
   }): Promise<UtilityConversionResult> {
-    const callerId = params.callerUserId || params.userId || this.userId;
+    const callerId = params.callerUserId || this.userId;
     const customHeaders: Record<string, string> = {};
     if (callerId) {
       customHeaders['x-user-id'] = callerId;
@@ -176,7 +176,7 @@ export class BountyEngineClient {
     description?: string;
     callerUserId?: string;
   }): Promise<UtilityBurnResult> {
-    const callerId = params.callerUserId || params.userId || this.userId;
+    const callerId = params.callerUserId || this.userId;
     const customHeaders: Record<string, string> = {};
     if (callerId) {
       customHeaders['x-user-id'] = callerId;
