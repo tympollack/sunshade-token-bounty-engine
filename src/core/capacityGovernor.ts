@@ -37,8 +37,9 @@ export function assertRunnerWeeklyCapacity(options: CapacityCheckOptions): Capac
   const clampedFlexBank = Math.min(MAX_FLEX_BANK_HOURS, Math.max(0, flexBankHoursAvailable));
   const effectiveCapacityCeiling = WEEKLY_SOVEREIGN_HOURS_CAP + clampedFlexBank;
 
-  const projectedTotalHours = Number((existingWeeklyHours + newTaskHours).toFixed(2));
-  const exceedsCapacity = projectedTotalHours > effectiveCapacityCeiling;
+  const rawTotalHours = existingWeeklyHours + newTaskHours;
+  const projectedTotalHours = Number(rawTotalHours.toFixed(2));
+  const exceedsCapacity = rawTotalHours > effectiveCapacityCeiling;
 
   if (exceedsCapacity && !allowOverride) {
     return {

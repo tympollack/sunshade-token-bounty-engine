@@ -24,7 +24,7 @@ export class LedgerGateway {
     }
 
     if (!data) {
-      // Upsert empty initial wallet
+      // Upsert empty initial wallet idempotently to prevent concurrent duplicate key collisions
       const newWallet: Partial<UserTokenWallet> = {
         user_id: userId,
         utility_balance: 0,
@@ -40,15 +40,28 @@ export class LedgerGateway {
 
       const { data: created, error: createErr } = await this.client
         .from('user_token_wallets')
-        .insert(newWallet)
+        .upsert(newWallet, { onConflict: 'user_id', ignoreDuplicates: true })
         .select('*')
-        .single();
+        .maybeSingle();
+
+      if (created) {
+        return created as UserTokenWallet;
+      }
+
+      // If already created concurrently, refetch
+      const { data: refetched } = await this.client
+        .from('user_token_wallets')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (refetched) {
+        return refetched as UserTokenWallet;
+      }
 
       if (createErr) {
         throw new Error(`Failed to initialize wallet for user ${userId}: ${createErr.message}`);
       }
-
-      return created as UserTokenWallet;
     }
 
     return data as UserTokenWallet;
@@ -134,6 +147,22 @@ export class LedgerGateway {
       );
     }
 
+    // Deduct from wallet balance atomically with gte balance check
+    const { data: updatedWallet, error: updateErr } = await this.client
+      .from('user_token_wallets')
+      .update({
+        utility_balance: wallet.utility_balance - amount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', userId)
+      .gte('utility_balance', amount)
+      .select('*')
+      .maybeSingle();
+
+    if (updateErr || !updatedWallet) {
+      throw new Error(`Insufficient utility balance or concurrent modification for user ${userId}.`);
+    }
+
     // Insert burn entry into public.hub_tokens_ledger
     const { error: ledgerErr } = await this.client.from('hub_tokens_ledger').insert({
       user_id: userId,
@@ -148,25 +177,42 @@ export class LedgerGateway {
     });
 
     if (ledgerErr) {
+      // Rollback wallet deduction if ledger insertion fails
+      await this.client
+        .from('user_token_wallets')
+        .update({
+          utility_balance: updatedWallet.utility_balance + amount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId);
       throw new Error(`Failed to record utility token burn in ledger: ${ledgerErr.message}`);
     }
 
-    // Deduct from wallet balance
-    const { data: updatedWallet, error: updateErr } = await this.client
-      .from('user_token_wallets')
-      .update({
-        utility_balance: wallet.utility_balance - amount,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('user_id', userId)
-      .select('*')
-      .single();
-
-    if (updateErr) {
-      throw new Error(`Failed to update wallet after token burn: ${updateErr.message}`);
-    }
-
     return updatedWallet as UserTokenWallet;
+  }
+
+  /**
+   * Checks whether an award has already been recorded for a specific work item and stream.
+   * Prevents duplicate minting on network retries.
+   */
+  async findExistingWorkItemAward(
+    workItemId: string,
+    stream: 'personal_bounty' | 'triage_upkeep'
+  ): Promise<boolean> {
+    try {
+      const { data, error } = await this.client
+        .from('hub_tokens_ledger')
+        .select('id')
+        .contains('metadata', { work_item_id: workItemId, stream })
+        .limit(1);
+
+      if (error || !Array.isArray(data)) {
+        return false;
+      }
+      return data.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /**

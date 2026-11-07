@@ -49,6 +49,20 @@ describe('Capacity Governor (20-Hour Weekly Sovereign Cap & Flex Bank)', () => {
     expect(res.rejectionReason).toContain('Runner weekly capacity exceeded');
   });
 
+  it('rejects tasks when unrounded sum strictly exceeds cap even if rounded sum would equal cap', () => {
+    // 19.999 + 0.002 = 20.001h > 20.00h (previously rounded to 20.00 and permitted)
+    const res = assertRunnerWeeklyCapacity({
+      claimantUserId: 'usr-precision',
+      newTaskHours: 0.002,
+      existingWeeklyHours: 19.999,
+      flexBankHoursAvailable: 0,
+      allowOverride: false,
+    });
+
+    expect(res.isPermitted).toBe(false);
+    expect(res.rejectionReason).toContain('Runner weekly capacity exceeded');
+  });
+
   it('permits tasks exceeding ceiling when allowOverride is explicitly set to true', () => {
     const res = assertRunnerWeeklyCapacity({
       claimantUserId: 'usr-admin',

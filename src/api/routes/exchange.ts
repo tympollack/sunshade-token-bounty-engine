@@ -43,6 +43,18 @@ export function createExchangeRouter(gateway: LedgerGateway): Router {
   router.post('/burn', async (req: Request, res: Response): Promise<void> => {
     const parsed = BurnUtilitySchema.parse(req.body);
 
+    // Cross-user authorization check: prevent burning another user's tokens unless authorized
+    const callerUserId = req.headers['x-user-id'] as string | undefined;
+    const hasAdminOrServiceRole = req.headers['x-role'] === 'admin' || req.headers['x-service-role'] === 'true';
+
+    if (callerUserId && callerUserId !== parsed.userId && !hasAdminOrServiceRole) {
+      res.status(403).json({
+        success: false,
+        error: 'Forbidden: Cannot burn utility tokens from another user wallet without admin/service role.',
+      });
+      return;
+    }
+
     const updatedWallet = await gateway.burnUtilityTokens(
       parsed.userId,
       parsed.amount,

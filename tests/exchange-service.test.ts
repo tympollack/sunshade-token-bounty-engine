@@ -56,4 +56,47 @@ describe('Exchange Service (1.25x Utility Bonus & Escrow Waterfall)', () => {
     expect(waterfall.payouts[0].payoutCents).toBe(0);
     expect(waterfall.totalFiatApprovedCents).toBe(0);
   });
+
+  it('enforces tax_compliance_locked gate when cumulative redemption reaches $599 threshold without verification', () => {
+    // User already redeemed $500 (50,000 cents). Claim requires 60,000 tokens ($125.00 / 12,500 cents).
+    // Total = $625.00 >= $599.00. User has taxComplianceVerified = false.
+    const waterfall = processEscrowWaterfall({
+      period: '2026-11',
+      grossRevenueCents: 1000000,
+      escrowPercentage: 0.30,
+      claims: [
+        {
+          userId: 'usr-unverified-tax',
+          tokensToRedeem: 60000,
+          paypalEmail: 'unverified@example.com',
+          ytdFiatRedeemedCents: 50000,
+          taxComplianceVerified: false,
+        },
+      ],
+    });
+
+    expect(waterfall.payouts[0].status).toBe('tax_compliance_locked');
+    expect(waterfall.payouts[0].reason).toContain('IRS 1099-NEC threshold ($599.00) reached');
+    expect(waterfall.totalFiatApprovedCents).toBe(0);
+  });
+
+  it('approves claims reaching $599 threshold when tax compliance is verified', () => {
+    const waterfall = processEscrowWaterfall({
+      period: '2026-11',
+      grossRevenueCents: 1000000,
+      escrowPercentage: 0.30,
+      claims: [
+        {
+          userId: 'usr-verified-tax',
+          tokensToRedeem: 60000,
+          paypalEmail: 'verified@example.com',
+          ytdFiatRedeemedCents: 50000,
+          taxComplianceVerified: true,
+        },
+      ],
+    });
+
+    expect(waterfall.payouts[0].status).toBe('approved');
+    expect(waterfall.payouts[0].payoutCents).toBe(12500);
+  });
 });

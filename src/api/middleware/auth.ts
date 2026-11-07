@@ -6,7 +6,16 @@ export function apiKeyAuth(req: Request, res: Response, next: NextFunction): voi
     return next();
   }
 
-  const expectedKey = process.env.ENGINE_API_KEY || 'sunshade-test-api-key';
+  const isProduction = process.env.NODE_ENV === 'production';
+  const expectedKey = process.env.ENGINE_API_KEY || (isProduction ? undefined : 'sunshade-test-api-key');
+
+  if (!expectedKey) {
+    res.status(500).json({
+      success: false,
+      error: 'Server Misconfiguration: ENGINE_API_KEY environment variable is not configured.',
+    });
+    return;
+  }
   const authHeader = req.headers.authorization;
   const apiKeyHeader = req.headers['x-api-key'];
 

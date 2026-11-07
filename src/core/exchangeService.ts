@@ -63,6 +63,22 @@ export function processEscrowWaterfall(options: EscrowWaterfallOptions): EscrowW
       continue;
     }
 
+    const ytdCents = claim.ytdFiatRedeemedCents ?? 0;
+    const isTaxVerified = claim.taxComplianceVerified ?? false;
+
+    // IRS 1099-NEC Threshold Gate ($599.00 / 59,900 cents)
+    if (ytdCents + requiredCents >= IRS_1099_NEC_THRESHOLD_CENTS && !isTaxVerified) {
+      payouts.push({
+        userId: claim.userId,
+        tokensRedeemed: 0,
+        payoutCents: 0,
+        paypalEmail: claim.paypalEmail,
+        status: 'tax_compliance_locked',
+        reason: `IRS 1099-NEC threshold ($599.00) reached. YTD: $${(ytdCents / 100).toFixed(2)}, Claim: $${(requiredCents / 100).toFixed(2)}. Tax compliance verification required.`,
+      });
+      continue;
+    }
+
     if (requiredCents > remainingPoolCents) {
       payouts.push({
         userId: claim.userId,

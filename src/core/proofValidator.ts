@@ -1,6 +1,6 @@
 import type { ItemVerificationProof, WorkItemRecord } from '../types';
 
-const GIT_COMMIT_SHA_REGEX = /^(commit-|sha-)?[0-9a-f]{3,40}$/i;
+const GIT_COMMIT_SHA_REGEX = /^(commit-|sha-)?[0-9a-f]{7,64}$/i;
 const PR_URL_REGEX = /^https?:\/\/[^\s/$.?#].[^\s]*(\/pull\/|\/merge_requests?\/|\/pull-requests?\/)\d+/i;
 const ZKP_PROOF_REGEX = /^[a-zA-Z0-9_\-]{8,128}$/;
 

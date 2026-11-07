@@ -182,6 +182,8 @@ export interface EscrowWaterfallClaim {
   userId: string;
   tokensToRedeem: number;
   paypalEmail?: string;
+  ytdFiatRedeemedCents?: number;
+  taxComplianceVerified?: boolean;
 }
 
 export interface EscrowWaterfallOptions {

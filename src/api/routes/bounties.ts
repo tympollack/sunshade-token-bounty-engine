@@ -44,12 +44,22 @@ export function createBountiesRouter(): Router {
   router.post('/claim', (req: Request, res: Response): void => {
     const parsed = ClaimSchema.parse(req.body);
 
+    // Administrative override gate: only allow override when explicitly authorized
+    const hasAdminRole = req.headers['x-admin-override'] === 'true' || req.headers['x-role'] === 'admin';
+    if (parsed.allowOverride && !hasAdminRole) {
+      res.status(403).json({
+        success: false,
+        error: 'Unauthorized: allowOverride requires administrative authorization headers (x-admin-override or x-role=admin).',
+      });
+      return;
+    }
+
     const capacityResult = assertRunnerWeeklyCapacity({
       claimantUserId: parsed.claimantUserId,
       newTaskHours: parsed.newTaskHours,
       existingWeeklyHours: parsed.existingWeeklyHours,
       flexBankHoursAvailable: parsed.flexBankHoursAvailable,
-      allowOverride: parsed.allowOverride,
+      allowOverride: parsed.allowOverride && hasAdminRole,
     });
 
     if (!capacityResult.isPermitted) {

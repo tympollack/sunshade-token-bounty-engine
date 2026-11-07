@@ -44,6 +44,7 @@ describe('Bounty Engine API Routes Integration Tests', () => {
         ...mockWallet,
         utility_balance: mockWallet.utility_balance - 10000,
       }),
+      findExistingWorkItemAward: vi.fn().mockResolvedValue(false),
       appendLedgerEntry: vi.fn().mockResolvedValue(undefined),
     } as unknown as LedgerGateway;
 
@@ -72,6 +73,25 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.quote.bountyTokens).toBe(60000);
+    });
+
+    it('blocks default key in production mode (SEC-0001)', async () => {
+      const origEnv = process.env.NODE_ENV;
+      const origKey = process.env.ENGINE_API_KEY;
+      try {
+        process.env.NODE_ENV = 'production';
+        delete process.env.ENGINE_API_KEY;
+
+        const res = await request(app)
+          .get('/api/v1/bounties/quote?bounty_hours=1.0')
+          .set('x-api-key', 'sunshade-test-api-key');
+
+        expect(res.status).toBe(500);
+        expect(res.body.error).toContain('ENGINE_API_KEY environment variable is not configured');
+      } finally {
+        process.env.NODE_ENV = origEnv;
+        process.env.ENGINE_API_KEY = origKey;
+      }
     });
   });
 
@@ -107,6 +127,38 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.capacity.isPermitted).toBe(true);
+    });
+
+    it('rejects allowOverride when caller lacks admin privileges (SEC-0004)', async () => {
+      const res = await request(app)
+        .post('/api/v1/bounties/claim')
+        .set('x-api-key', TEST_API_KEY)
+        .send({
+          claimantUserId: 'usr-runner',
+          newTaskHours: 5.0,
+          existingWeeklyHours: 20.0,
+          allowOverride: true,
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('allowOverride requires administrative authorization');
+    });
+
+    it('allows allowOverride when caller has admin authorization header', async () => {
+      const res = await request(app)
+        .post('/api/v1/bounties/claim')
+        .set('x-api-key', TEST_API_KEY)
+        .set('x-admin-override', 'true')
+        .send({
+          claimantUserId: 'usr-runner',
+          newTaskHours: 5.0,
+          existingWeeklyHours: 20.0,
+          allowOverride: true,
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.capacity.isPermitted).toBe(true);
+      expect(res.body.capacity.isOverridden).toBe(true);
     });
   });
 
@@ -155,6 +207,109 @@ describe('Bounty Engine API Routes Integration Tests', () => {
       expect(res.body.bountyTokensMinted).toBe(12000); // 0.20 hrs * 60k
       expect(mockGateway.creditWorkRebate).toHaveBeenCalled();
     });
+
+    it('is idempotent on repeat mints (BUG-0002)', async () => {
+      (mockGateway.findExistingWorkItemAward as any).mockResolvedValue(true);
+
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .send({
+          item: {
+            id: 'task-repeat',
+            status: 'complete',
+            assignee_id: 'usr-42',
+            metadata: { commit_sha: 'sha-abcdef0123456789' },
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.upkeepTokensMinted).toBe(0);
+      expect(res.body.bountyTokensMinted).toBe(0);
+      expect(res.body.reason).toContain('already minted in prior transaction (idempotent no-op)');
+    });
+
+    it('returns zero bounty tokens for unassigned tasks (BUG-0005)', async () => {
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .send({
+          item: {
+            id: 'task-unassigned',
+            status: 'complete',
+            // No assignee_id and no claimantUserId
+            metadata: { commit_sha: 'sha-abcdef0123456789' },
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.isEligibleForUpkeep).toBe(true);
+      expect(res.body.isEligibleForBounty).toBe(false);
+      expect(res.body.bountyTokensMinted).toBe(0);
+      expect(res.body.upkeepTokensMinted).toBe(3000);
+      expect(res.body.reason).toContain('Work item is not assigned to a claimant');
+    });
+
+    it('honors fixed_reward_tokens over hours-based calculation (BUG-0004)', async () => {
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .send({
+          item: {
+            id: 'task-fixed-reward',
+            status: 'complete',
+            assignee_id: 'usr-42',
+            metadata: {
+              commit_sha: 'sha-abcdef0123456789',
+              bounty_hours: 2.0,
+              fixed_reward_tokens: 250000,
+            },
+          },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.bountyTokensMinted).toBe(250000);
+    });
+
+    it('rejects claimant spoofing when claimantUserId contradicts item assignee (SEC-0002)', async () => {
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .send({
+          item: {
+            id: 'task-spoof',
+            status: 'complete',
+            assignee_id: 'usr-legit',
+            metadata: { commit_sha: 'sha-abcdef0123456789' },
+          },
+          claimantUserId: 'usr-impostor',
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Claimant user ID does not match work item assignee');
+    });
+
+    it('rejects invalid or non-positive bounty hours (SEC-0006)', async () => {
+      const res = await request(app)
+        .post('/api/v1/mint/efficiency')
+        .set('x-api-key', TEST_API_KEY)
+        .send({
+          item: {
+            id: 'task-neg-hours',
+            status: 'complete',
+            assignee_id: 'usr-42',
+            metadata: {
+              commit_sha: 'sha-abcdef0123456789',
+              bounty_hours: -5.0,
+            },
+          },
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('Invalid or non-positive bounty hours');
+    });
   });
 
   describe('Exchanges & Wallet Rollups', () => {
@@ -193,6 +348,21 @@ describe('Bounty Engine API Routes Integration Tests', () => {
         undefined,
         undefined
       );
+    });
+
+    it('rejects burning another user tokens without authorization (SEC-0003)', async () => {
+      const res = await request(app)
+        .post('/api/v1/exchange/burn')
+        .set('x-api-key', TEST_API_KEY)
+        .set('x-user-id', 'usr-different')
+        .send({
+          userId: 'usr-victim',
+          amount: 5000,
+          serviceName: 'sticker_burn',
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error).toContain('Cannot burn utility tokens from another user wallet');
     });
 
     it('GET /api/v1/wallets/:userId returns user wallet', async () => {
