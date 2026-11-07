@@ -64,12 +64,14 @@ export function processEscrowWaterfall(options: EscrowWaterfallOptions): EscrowW
       continue;
     }
 
-    const initialYtd = claim.ytdFiatRedeemedCents ?? 0;
-    const currentYtd = userCumulativeYtdCents.get(claim.userId) ?? initialYtd;
+    const claimYtd = claim.ytdFiatRedeemedCents ?? 0;
+    const existingYtd = userCumulativeYtdCents.get(claim.userId) ?? 0;
+    const currentYtd = Math.max(claimYtd, existingYtd);
     const isTaxVerified = claim.taxComplianceVerified ?? false;
 
     // IRS 1099-NEC Threshold Gate ($599.00 / 59,900 cents)
     if (currentYtd + requiredCents >= IRS_1099_NEC_THRESHOLD_CENTS && !isTaxVerified) {
+      userCumulativeYtdCents.set(claim.userId, currentYtd);
       payouts.push({
         userId: claim.userId,
         tokensRedeemed: 0,
@@ -82,6 +84,7 @@ export function processEscrowWaterfall(options: EscrowWaterfallOptions): EscrowW
     }
 
     if (requiredCents > remainingPoolCents) {
+      userCumulativeYtdCents.set(claim.userId, currentYtd);
       payouts.push({
         userId: claim.userId,
         tokensRedeemed: 0,

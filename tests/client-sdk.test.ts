@@ -160,7 +160,7 @@ describe('BountyEngineClient SDK Tests', () => {
     ).rejects.toThrow('Caller identity (callerUserId or client userId) is required for token burn');
   });
 
-  it('allows burnUtilityTokens without caller identity when adminKey is provided', async () => {
+  it('allows burnUtilityTokens without caller identity when adminKey is provided alongside apiKey', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ success: true }),
@@ -168,6 +168,7 @@ describe('BountyEngineClient SDK Tests', () => {
 
     const client = new BountyEngineClient({
       baseUrl: 'http://localhost:4000',
+      apiKey: 'test-api-key',
       adminKey: 'test-admin-key',
       fetchFn: mockFetch as any,
     });
@@ -182,6 +183,8 @@ describe('BountyEngineClient SDK Tests', () => {
       'http://localhost:4000/api/v1/exchange/burn',
       expect.objectContaining({
         headers: expect.objectContaining({
+          Authorization: 'Bearer test-api-key',
+          'x-api-key': 'test-api-key',
           'x-admin-key': 'test-admin-key',
         }),
       })

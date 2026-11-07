@@ -133,4 +133,35 @@ describe('Exchange Service (1.25x Utility Bonus & Escrow Waterfall)', () => {
     expect(waterfall.payouts[1].reason).toContain('IRS 1099-NEC threshold ($599.00) reached');
     expect(waterfall.totalFiatApprovedCents).toBe(40000);
   });
+
+  it('enforces higher updated YTD on later claims in a batch (SEC-0008-UPDATED)', () => {
+    // Claim 1: YTD 0, claims $100 (48,000 tokens = 10,000 cents). Approved. Cumulative becomes 10,000.
+    // Claim 2: Updated YTD reports 55,000 cents, claims $100 (10,000 cents).
+    // Cumulative YTD must use Math.max(55000, 10000) = 55,000 + 10,000 = 65,000 >= 59,900 -> locked!
+    const waterfall = processEscrowWaterfall({
+      period: '2026-11',
+      grossRevenueCents: 10000000,
+      escrowPercentage: 0.30,
+      claims: [
+        {
+          userId: 'usr-updated-ytd',
+          tokensToRedeem: 48000,
+          paypalEmail: 'updated@example.com',
+          ytdFiatRedeemedCents: 0,
+          taxComplianceVerified: false,
+        },
+        {
+          userId: 'usr-updated-ytd',
+          tokensToRedeem: 48000,
+          paypalEmail: 'updated@example.com',
+          ytdFiatRedeemedCents: 55000,
+          taxComplianceVerified: false,
+        },
+      ],
+    });
+
+    expect(waterfall.payouts[0].status).toBe('approved');
+    expect(waterfall.payouts[1].status).toBe('tax_compliance_locked');
+    expect(waterfall.payouts[1].reason).toContain('IRS 1099-NEC threshold ($599.00) reached');
+  });
 });

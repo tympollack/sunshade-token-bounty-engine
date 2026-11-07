@@ -206,7 +206,13 @@ export function createMintRouter(gateway: LedgerGateway): Router {
         );
         upkeepTokensMinted = upkeepAmount;
       } catch (err: any) {
-        if (err.message && (err.message.includes('unique') || err.message.includes('duplicate'))) {
+        if (
+          err.code === '23505' ||
+          (err.message &&
+            (err.message.includes('unique') ||
+              err.message.includes('duplicate') ||
+              err.message.includes('idx_hub_tokens_ledger_work_item_stream')))
+        ) {
           upkeepTokensMinted = 0;
         } else {
           throw err;
@@ -274,7 +280,13 @@ export function createMintRouter(gateway: LedgerGateway): Router {
         );
         personalTokensMinted = bountyTokens;
       } catch (err: any) {
-        if (err.message && (err.message.includes('unique') || err.message.includes('duplicate'))) {
+        if (
+          err.code === '23505' ||
+          (err.message &&
+            (err.message.includes('unique') ||
+              err.message.includes('duplicate') ||
+              err.message.includes('idx_hub_tokens_ledger_work_item_stream')))
+        ) {
           personalTokensMinted = 0;
         } else {
           throw err;
